@@ -1,1 +1,93 @@
-git
+####################################################################################################
+# 
+# FILENAME:          azure-pipelines.yml
+#
+# DESCRIPTION:       Configuration file to automate Continuous Integration 
+#                    using Salesforce CLI
+#                    - Static Code Analysis
+#                    - Validate changes in the scratch org (Future)
+#
+#####################################################################################################
+# Control which branches get CI triggers 
+trigger:
+  batch: true # when a pipeline is running, the system sequences the runs
+  branches:
+    include:
+    - master
+    - features/*
+    - releases/*
+    - hotfixes/*
+# Specify file paths to include or exclude
+  paths:
+    exclude:
+      - azure-pipelines.yml
+
+# Microsoft hosted agent to run the pipeline
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+
+- task: CodeScanCloudPrepare@1
+  inputs:
+    CodeScanCloud: 'SonarCube'
+    organization: '5eb7c561bfebdd1aa10970ea'
+    scannerMode: 'CLI'
+    configMode: 'manual'
+    cliProjectKey: 'SWSPortal'
+    cliProjectName: 'SWSPortal'
+    cliSources: './force-app/main/default'
+
+- task: CodeScanCloudAnalyze@1
+
+- task: CodeScanCloudPublish@1
+  inputs:
+    pollingTimeoutSec: '300'
+
+- task: PowerShell@2
+  inputs:
+    targetType: 'inline'
+    script: |
+      # Quality Gate
+      
+      $token = [System.Text.Encoding]::UTF8.GetBytes("73819556b1ed2dbc38696fe5dea040df3c41450d:")
+      $base64 = [System.Convert]::ToBase64String($token)
+                  
+      $basicAuth = [string]::Format("Basic {0}", $base64)
+      $headers = @{ Authorization = $basicAuth }
+                  
+      Write-Host $headers
+                  
+      $result = Invoke-RestMethod -Method Get -Uri https://app.codescan.io/api/qualitygates/project_status?projectKey=SWSPortal -Headers $headers
+      $result | ConvertTo-Json | Write-Host
+                  
+      if ($result.projectStatus.status -eq "OK") {
+        Write-Host "Quality Gate Succeeded“
+      } else {
+        throw "Quality gate failed“
+      }
+
+# Install Salesforce DX CLI
+- script: sudo npm install sfdx-cli --global
+
+# Convert source-formatted files into the metadata format, so that you can deploy them using Metadata API,
+- script: sfdx force:source:convert -d ./src
+
+- script: mkdir /home/vsts/work/1/a/src
+
+- task: CopyFiles@2
+  inputs:
+    SourceFolder: '/home/vsts/work/1/s/src'
+    Contents: '**'
+    TargetFolder: '/home/vsts/work/1/a/src'
+    CleanTargetFolder: true
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+    ArtifactName: 'portaldrop'
+    publishLocation: 'Container'
+
+- script: ls -al $(Build.ArtifactStagingDirectory) 
+
+# END-OF-CONFIG-FILE
